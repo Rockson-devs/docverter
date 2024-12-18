@@ -1,7 +1,5 @@
-// src/app/api/convert/route.ts
-
 import { NextResponse } from 'next/server';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import mammoth from 'mammoth';
 
 export async function POST(request: Request) {
@@ -14,24 +12,79 @@ export async function POST(request: Request) {
 
   try {
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([600, 800]);
-    let content = 'Unsupported file type.';
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontSize = 12;
+    const pageWidth = 600;
+    const pageHeight = 800;
+    const margin = 50;
+    const maxWidth = pageWidth - 2 * margin;
+    const lineHeight = fontSize * 1.2;
 
     const arrayBuffer = await file.arrayBuffer();
     const fileType = file.type;
 
-    // Handle .docx files
+    // Convert ArrayBuffer to Buffer
+    const buffer = Buffer.from(arrayBuffer);
+
+    let content = 'Unsupported file type.';
     if (fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const { value } = await mammoth.extractRawText({ buffer: arrayBuffer });
+      const { value } = await mammoth.extractRawText({ buffer });
       content = value || 'No content found in .docx file.';
-    }
-    // Handle .txt files
-    else if (fileType === 'text/plain') {
+    } else if (fileType === 'text/plain') {
       content = new TextDecoder().decode(arrayBuffer);
     }
 
-    // Add content to the PDF page
-    page.drawText(content, { x: 50, y: 750, maxWidth: 500 });
+    // Split content into lines manually while respecting line breaks
+    const splitTextIntoLines = (
+      text: string,
+      maxWidth: number,
+      fontSize: number,
+      font: any
+    ) => {
+      const paragraphs = text.split('\n'); // Split by line breaks to preserve paragraphs
+      const lines: string[] = [];
+
+      paragraphs.forEach(paragraph => {
+        const words = paragraph.split(' ');
+        let currentLine = '';
+
+        words.forEach(word => {
+          const testLine = currentLine ? `${currentLine} ${word}` : word;
+          const testLineWidth = font.widthOfTextAtSize(testLine, fontSize);
+
+          if (testLineWidth <= maxWidth) {
+            currentLine = testLine;
+          } else {
+            lines.push(currentLine);
+            currentLine = word;
+          }
+        });
+
+        if (currentLine) lines.push(currentLine);
+        lines.push(''); // Add an empty line to separate paragraphs
+      });
+
+      return lines;
+    };
+
+    const lines = splitTextIntoLines(content, maxWidth, fontSize, font);
+    let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+    let currentY = pageHeight - margin;
+
+    for (const line of lines) {
+      if (currentY - lineHeight < margin) {
+        currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+        currentY = pageHeight - margin;
+      }
+
+      if (line.trim() === '') {
+        // Add vertical space for blank lines (paragraph breaks)
+        currentY -= lineHeight;
+      } else {
+        currentPage.drawText(line, { x: margin, y: currentY, size: fontSize, font });
+        currentY -= lineHeight;
+      }
+    }
 
     const pdfBytes = await pdfDoc.save();
     const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
